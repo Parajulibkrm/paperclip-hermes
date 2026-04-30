@@ -32,15 +32,16 @@ services:
       - BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY:-}
       - BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID:-}
 
-      # --- Paperclip web exposure ---
-      # Set to your public hostname / Dokploy domain (no scheme) so the UI
-      # accepts requests from it. Example: paperclip.example.com
-      - IP_ADDRESS=${IP_ADDRESS:-}
-      # Bind mode for paperclipai's reachability preset:
-      #   loopback — 127.0.0.1 only (default; unreachable from outside the container)
-      #   lan      — all interfaces (required for Traefik / Docker port-forwarding)
-      #   tailnet  — Tailscale-only
+      # --- Paperclip server config ---
+      # Reachability preset (loopback|lan|tailnet). `lan` listens on all
+      # interfaces so Traefik can reach paperclipai over the overlay network.
       - PAPERCLIP_BIND=${PAPERCLIP_BIND:-lan}
+      # Hostname check strictness (public|private). `public` accepts any Host
+      # header — the right choice for any reverse-proxied deploy where
+      # deploymentMode=authenticated still gates access via login.
+      - PAPERCLIP_EXPOSURE=${PAPERCLIP_EXPOSURE:-public}
+      # Only used when PAPERCLIP_EXPOSURE=private. Same value as PAPERCLIP_DOMAIN.
+      - IP_ADDRESS=${IP_ADDRESS:-}
     volumes:
       - paperclip-data:/data/paperclip
       - hermes-data:/data/hermes
