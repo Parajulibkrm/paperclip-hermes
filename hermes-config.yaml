@@ -1,0 +1,17 @@
+# Default Hermes config seeded into $HERMES_HOME/config.yaml on first boot.
+# Override the active model at runtime with the HERMES_MODEL env var
+# (entrypoint.sh patches `model.default` in place), or edit this file directly
+# in the persistent volume.
+#
+# Examples for HERMES_MODEL:
+#   openrouter/free               (default — works with just OPENROUTER_API_KEY)
+#   anthropic/claude-sonnet-4.6
+#   anthropic/claude-opus-4.7
+#   anthropic/claude-haiku-4-5
+#   openai/gpt-oss-120b:free
+#   qwen/qwen3-coder:free
+model:
+  default: "openrouter/free"
+
+terminal:
+  backend: local

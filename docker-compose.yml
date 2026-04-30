@@ -1,0 +1,42 @@
+services:
+  paperclip-hermes:
+    build: .
+    container_name: paperclip-hermes
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    ports:
+      # Paperclip web UI. In Dokploy, expose this via a Traefik domain instead
+      # of a direct host port if you want HTTPS/auth in front of it.
+      - "3100:3100"
+    environment:
+      # --- Model selection (optional, default in hermes-config.yaml is openrouter/free) ---
+      - HERMES_MODEL=${HERMES_MODEL:-openrouter/free}
+
+      # --- Inference provider keys (set whichever ones your HERMES_MODEL uses) ---
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+
+      # --- Browser providers (cloud) — optional, enables remote Chromium for
+      #     the browser-harness skill. The image also bundles local Playwright
+      #     deps if you'd rather drive a headless browser inside the container. ---
+      - BROWSER_USE_API_KEY=${BROWSER_USE_API_KEY:-}
+      - BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY:-}
+      - BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID:-}
+
+      # --- Paperclip web exposure ---
+      # Set to your public hostname / Dokploy domain (no scheme) so the UI
+      # accepts requests from it. Example: paperclip.example.com
+      - IP_ADDRESS=${IP_ADDRESS:-}
+      - HOST=0.0.0.0
+    volumes:
+      - paperclip-data:/data/paperclip
+      - hermes-data:/data/hermes
+      - browser-harness-cache:/opt/browser-harness/.cache
+
+volumes:
+  paperclip-data:
+  hermes-data:
+  browser-harness-cache:
