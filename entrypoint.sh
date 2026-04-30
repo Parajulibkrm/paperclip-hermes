@@ -15,6 +15,9 @@ export PAPERCLIP_BIND="${PAPERCLIP_BIND:-lan}"
 # requires registering each public hostname via `paperclipai allowed-hostname`.
 # For Traefik-fronted deploys, `public` is the right default — auth is still on.
 export PAPERCLIP_EXPOSURE="${PAPERCLIP_EXPOSURE:-public}"
+# Public hostname Traefik routes to this service. Used to register the
+# allowed-hostname on every boot so private-mode allowlist always accepts it.
+export PAPERCLIP_DOMAIN="${PAPERCLIP_DOMAIN:-}"
 
 mkdir -p "${PAPERCLIP_HOME}" "${HERMES_HOME}"
 
@@ -77,16 +80,25 @@ case "${1:-paperclip}" in
             echo "[entrypoint] config.json server.exposure = ${PAPERCLIP_EXPOSURE}"
         fi
 
-        # Only relevant when running with exposure=private: register the public
-        # hostname so paperclipai's allowlist accepts it. No-op when public.
-        if [ "${PAPERCLIP_EXPOSURE}" = "private" ] && [ -n "${IP_ADDRESS:-}" ]; then
-            echo "[entrypoint] registering allowed-hostname '${IP_ADDRESS}' (private mode)"
+        # Always register PAPERCLIP_DOMAIN in the allowlist if set. This is the
+        # canonical fix paperclipai's own error message recommends, and it works
+        # regardless of exposure mode — harmless in public, required in private.
+        # We do this every boot so a stale volume from an earlier deploy still
+        # gets the right hostname registered without manual intervention.
+        if [ -n "${PAPERCLIP_DOMAIN:-}" ]; then
+            echo "[entrypoint] registering allowed-hostname '${PAPERCLIP_DOMAIN}'"
             su -s /bin/bash node -c "
                 export HOME='${PAPERCLIP_HOME}' \
                        PAPERCLIP_HOME='${PAPERCLIP_HOME}' \
                        PATH='${PATH}'
-                paperclipai allowed-hostname --data-dir '${PAPERCLIP_HOME}' '${IP_ADDRESS}'
+                paperclipai allowed-hostname --data-dir '${PAPERCLIP_HOME}' '${PAPERCLIP_DOMAIN}'
             " || echo "[entrypoint] WARNING: allowed-hostname registration failed"
+        fi
+
+        # Verification log so failures here are obvious in `docker logs`.
+        if [ -f "$CFG" ]; then
+            echo "[entrypoint] config.json final state:"
+            grep -E '"exposure"|"allowedHostnames"' "$CFG" | sed 's/^/[entrypoint]   /'
         fi
 
         echo "[entrypoint] starting paperclipai run --bind ${PAPERCLIP_BIND} --data-dir ${PAPERCLIP_HOME} as node on :3100"
