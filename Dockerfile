@@ -25,29 +25,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# --- uv (installed independently to a known path) ---
+# The hermes installer also bundles a uv, but its internal layout has shifted
+# over time so we don't depend on it. Pinning uv to /usr/local/bin keeps the
+# browser-harness install step below stable across hermes upgrades.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
+ && /usr/local/bin/uv --version
+
 # --- Hermes Agent ---
 # Install to /opt/hermes (not /root) so the unprivileged `node` user can read
 # the binaries and skill tree at runtime. The install script ends with an
 # interactive setup wizard; we redirect /dev/null so it exits on EOF, and
-# `|| true` swallows the wizard's non-zero exit. We then verify the critical
-# bits landed on disk so silent breakage still fails the build. The install
-# script links `hermes` into /usr/local/bin itself — don't re-link.
+# `|| true` swallows the wizard's non-zero exit. The install script links
+# `hermes` into /usr/local/bin itself — we just verify it's callable.
 RUN mkdir -p /opt/hermes \
  && export HOME=/opt/hermes \
  && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
  && bash /tmp/hermes-install.sh </dev/null || true \
  && rm -f /tmp/hermes-install.sh \
- && test -x /opt/hermes/.local/bin/uv \
- && test -d /opt/hermes/.hermes/hermes-agent \
  && command -v hermes >/dev/null \
  && chmod -R a+rX /opt/hermes
 
 # --- Browser Harness (browser-use's hermes skill) ---
+# We install browser-harness as a uv tool with HOME=/opt/hermes so its
+# entry-point script lands at /opt/hermes/.local/bin/ (already on PATH for
+# both root and node). The cloned source stays at /opt/browser-harness so
+# the hermes skill symlinks below have something stable to point at.
 WORKDIR /opt
 RUN git clone https://github.com/browser-use/browser-harness \
  && cd browser-harness \
  && export HOME=/opt/hermes \
- && /opt/hermes/.local/bin/uv tool install -e . \
+ && uv tool install -e . \
  && chmod -R a+rX /opt/hermes /opt/browser-harness
 
 # --- Register browser-harness as a hermes skill at the image level ---
