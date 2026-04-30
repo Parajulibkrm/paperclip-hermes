@@ -36,11 +36,30 @@ services:
       # Set to your public hostname / Dokploy domain (no scheme) so the UI
       # accepts requests from it. Example: paperclip.example.com
       - IP_ADDRESS=${IP_ADDRESS:-}
-      - HOST=0.0.0.0
+      # Bind mode for paperclipai's reachability preset:
+      #   loopback — 127.0.0.1 only (default; unreachable from outside the container)
+      #   lan      — all interfaces (required for Traefik / Docker port-forwarding)
+      #   tailnet  — Tailscale-only
+      - PAPERCLIP_BIND=${PAPERCLIP_BIND:-lan}
     volumes:
       - paperclip-data:/data/paperclip
       - hermes-data:/data/hermes
       - browser-harness-cache:/opt/browser-harness/.cache
+    # Explicit Traefik labels — Dokploy's Domains-tab UI sometimes doesn't
+    # inject these into Compose-mode services (we observed empty labels in
+    # `docker service inspect`). Setting them here guarantees Traefik routes
+    # the configured ${PAPERCLIP_DOMAIN} to this service on port 3100.
+    # In Swarm mode, Traefik reads labels from `deploy.labels`, not the
+    # top-level `labels:` key.
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=dokploy-network
+        - traefik.http.routers.paperclip.rule=Host(`${PAPERCLIP_DOMAIN}`)
+        - traefik.http.routers.paperclip.entrypoints=websecure
+        - traefik.http.routers.paperclip.tls=true
+        - traefik.http.routers.paperclip.tls.certresolver=letsencrypt
+        - traefik.http.services.paperclip.loadbalancer.server.port=3100
 
 volumes:
   paperclip-data:

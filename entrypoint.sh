@@ -5,7 +5,11 @@ echo "[entrypoint] pid=$$ starting as $(id -un) ($(id))"
 
 export PAPERCLIP_HOME="${PAPERCLIP_HOME:-/data/paperclip}"
 export HERMES_HOME="${HERMES_HOME:-/data/hermes}"
-export HOST="${HOST:-0.0.0.0}"
+# paperclipai uses --bind <mode> (loopback|lan|tailnet), set at onboard time,
+# to control which interfaces it listens on. The default `loopback` binds to
+# 127.0.0.1 only and makes the app unreachable from outside the container —
+# which is wrong for any networked deployment, so we default to `lan`.
+export PAPERCLIP_BIND="${PAPERCLIP_BIND:-lan}"
 
 mkdir -p "${PAPERCLIP_HOME}" "${HERMES_HOME}"
 
@@ -57,15 +61,17 @@ case "${1:-paperclip}" in
     paperclip)
         # First boot: paperclipai onboard initialises its data dir + db schema.
         # Run as node since the embedded postgres refuses to come up as root,
-        # and onboard touches the same files run() will read.
+        # and onboard touches the same files run() will read. We pass
+        # --bind ${PAPERCLIP_BIND} so the reachability preset is set up-front,
+        # not stuck on the loopback default.
         if [ ! -d "${PAPERCLIP_HOME}/instances" ]; then
-            echo "[entrypoint] first boot — running paperclipai onboard --yes as node"
+            echo "[entrypoint] first boot — running paperclipai onboard --yes --bind ${PAPERCLIP_BIND} as node"
             su -s /bin/bash node -c "
                 export HOME='${PAPERCLIP_HOME}' \
                        PAPERCLIP_HOME='${PAPERCLIP_HOME}' \
                        HERMES_HOME='${HERMES_HOME}' \
                        PATH='${PATH}'
-                paperclipai onboard --yes
+                paperclipai onboard --yes --bind '${PAPERCLIP_BIND}'
             " || echo "[entrypoint] WARNING: onboard exited non-zero"
         fi
 
@@ -82,14 +88,13 @@ case "${1:-paperclip}" in
             " || echo "[entrypoint] WARNING: allowed-hostname registration failed"
         fi
 
-        echo "[entrypoint] starting paperclipai run as node on ${HOST}:3100"
+        echo "[entrypoint] starting paperclipai run --bind ${PAPERCLIP_BIND} as node on :3100"
         exec su -s /bin/bash node -c "
             export HOME='${PAPERCLIP_HOME}' \
                    PAPERCLIP_HOME='${PAPERCLIP_HOME}' \
                    HERMES_HOME='${HERMES_HOME}' \
-                   HOST='${HOST}' \
                    PATH='${PATH}'
-            exec paperclipai run
+            exec paperclipai run --bind '${PAPERCLIP_BIND}'
         "
         ;;
     hermes)
