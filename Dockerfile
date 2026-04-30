@@ -27,18 +27,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- Hermes Agent ---
 # Install to /opt/hermes (not /root) so the unprivileged `node` user can read
-# the binaries and skill tree at runtime. --skip-setup avoids the interactive
-# model wizard; we seed config.yaml ourselves below.
+# the binaries and skill tree at runtime. The install script ends with an
+# interactive setup wizard; we redirect /dev/null so it exits on EOF, and
+# `|| true` swallows the wizard's non-zero exit. We then verify the critical
+# bits landed on disk so silent breakage still fails the build. The install
+# script links `hermes` into /usr/local/bin itself — don't re-link.
 RUN mkdir -p /opt/hermes \
  && export HOME=/opt/hermes \
  && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
- && bash /tmp/hermes-install.sh --skip-setup </dev/null \
- && rm /tmp/hermes-install.sh \
+ && bash /tmp/hermes-install.sh </dev/null || true \
+ && rm -f /tmp/hermes-install.sh \
  && test -x /opt/hermes/.local/bin/uv \
- && test -x /opt/hermes/.local/bin/hermes \
  && test -d /opt/hermes/.hermes/hermes-agent \
- && ln -sf /opt/hermes/.local/bin/hermes /usr/local/bin/hermes \
- && ln -sf /opt/hermes/.local/bin/uv /usr/local/bin/uv \
+ && command -v hermes >/dev/null \
  && chmod -R a+rX /opt/hermes
 
 # --- Browser Harness (browser-use's hermes skill) ---
