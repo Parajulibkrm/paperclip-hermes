@@ -5,10 +5,16 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
-    ports:
-      # Paperclip web UI. In Dokploy, expose this via a Traefik domain instead
-      # of a direct host port if you want HTTPS/auth in front of it.
-      - "3100:3100"
+    # Attach to Dokploy's overlay network so Traefik can reach this service.
+    # Without this, Dokploy's auto-generated Traefik route returns 502 because
+    # the container isn't on the network Traefik routes on.
+    networks:
+      - dokploy-network
+    expose:
+      # Internal-only port. Traefik connects on this port across dokploy-network.
+      # We don't publish it to the host (`ports:`) because Dokploy/Swarm strips
+      # host port mappings anyway when Traefik fronts the service.
+      - "3100"
     environment:
       # --- Model selection (optional, default in hermes-config.yaml is openrouter/free) ---
       - HERMES_MODEL=${HERMES_MODEL:-openrouter/free}
@@ -40,3 +46,10 @@ volumes:
   paperclip-data:
   hermes-data:
   browser-harness-cache:
+
+networks:
+  # External: created by Dokploy at install time. We just join it; we don't
+  # define it. If this isn't a Dokploy host, create it once with:
+  #   docker network create --driver overlay --attachable dokploy-network
+  dokploy-network:
+    external: true
