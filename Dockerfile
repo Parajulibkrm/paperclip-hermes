@@ -74,6 +74,14 @@ RUN touch /etc/hermes/.env
 # --- Paperclip web app ---
 RUN npm install -g paperclipai
 
+# Patch NousResearch/hermes-paperclip-adapter#2: released adapter versions do
+# not inject ctx.authToken into the hermes child env as PAPERCLIP_API_KEY, so
+# every agent curl to the Paperclip API returns 401. Upstream main has the fix
+# (PR #4) but no patch release is published yet. The script is idempotent —
+# once a fixed adapter ships on npm, it detects the fix and no-ops.
+COPY patch-hermes-adapter.mjs /tmp/patch-hermes-adapter.mjs
+RUN node /tmp/patch-hermes-adapter.mjs && rm -f /tmp/patch-hermes-adapter.mjs
+
 # Data dirs (paperclipai writes its postgres + instances under PAPERCLIP_HOME;
 # hermes config + .env live under HERMES_HOME). Owned by node so the
 # unprivileged run user can write to them.
