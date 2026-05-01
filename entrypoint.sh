@@ -3,6 +3,21 @@ set -euo pipefail
 
 echo "[entrypoint] pid=$$ starting as $(id -un) ($(id))"
 
+# Reduce a public-host value to bare hostname for Traefik allowlists (HTTP(S) URL or host:port).
+normalize_paperclip_hostname() {
+    local raw="${1:-}"
+    raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -z "$raw" ]; then
+        printf ''
+        return 0
+    fi
+    raw="${raw#https://}"
+    raw="${raw#http://}"
+    raw="${raw%%/*}"
+    raw="${raw%%:*}"
+    printf '%s' "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+}
+
 export PAPERCLIP_HOME="${PAPERCLIP_HOME:-/data/paperclip}"
 export HERMES_HOME="${HERMES_HOME:-/data/hermes}"
 # `bind` (loopback|lan|tailnet) is paperclipai's reachability preset, baked in
@@ -15,9 +30,36 @@ export PAPERCLIP_BIND="${PAPERCLIP_BIND:-lan}"
 # requires registering each public hostname via `paperclipai allowed-hostname`.
 # For Traefik-fronted deploys, `public` is the right default — auth is still on.
 export PAPERCLIP_EXPOSURE="${PAPERCLIP_EXPOSURE:-public}"
-# Public hostname Traefik routes to this service. Used to register the
-# allowed-hostname on every boot so private-mode allowlist always accepts it.
-export PAPERCLIP_DOMAIN="${PAPERCLIP_DOMAIN:-}"
+# README/Dokploy sometimes use IP_ADDRESS; accept as alias for PAPERCLIP_DOMAIN.
+export PAPERCLIP_DOMAIN="${PAPERCLIP_DOMAIN:-${IP_ADDRESS:-}}"
+export PAPERCLIP_DOMAIN="$(normalize_paperclip_hostname "$PAPERCLIP_DOMAIN")"
+#
+# Paperclip's Node server (@paperclipai/server) honors these names — NOT `PAPERCLIP_EXPOSURE`.
+# Mirror our compose-friendly var into upstream env for the supervised `paperclipai run`:
+export PAPERCLIP_DEPLOYMENT_EXPOSURE="${PAPERCLIP_DEPLOYMENT_EXPOSURE:-${PAPERCLIP_EXPOSURE:-public}}"
+# When you set PAPERCLIP_DOMAIN, push it into Paperclip's allowlist regardless of exposure
+# (`public` skips enforcement; harmless). For `private`, this avoids relying on flaky JSON edits.
+if [ -n "${PAPERCLIP_DOMAIN:-}" ]; then
+    export PAPERCLIP_ALLOWED_HOSTNAMES="${PAPERCLIP_ALLOWED_HOSTNAMES:-$PAPERCLIP_DOMAIN}"
+fi
+#
+# authenticated + deploymentExposure `public` requires an explicit HTTPS (or HTTP) origin.
+# Dokploy terminates TLS → default to https://<domain>; override anytime with PAPERCLIP_PUBLIC_URL.
+if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] \
+    && [ -n "${PAPERCLIP_DOMAIN:-}" ] \
+    && [ -z "${PAPERCLIP_PUBLIC_URL:-}${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}${BETTER_AUTH_URL:-}${BETTER_AUTH_BASE_URL:-}" ]; then
+    export PAPERCLIP_PUBLIC_URL="https://${PAPERCLIP_DOMAIN}"
+fi
+
+# authenticated + deploymentExposure `public` must see a public URL at runtime (@paperclipai/server).
+paperclip_origin_set() {
+    [ -n "${PAPERCLIP_PUBLIC_URL:-}${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}${BETTER_AUTH_URL:-}${BETTER_AUTH_BASE_URL:-}" ]
+}
+if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] && ! paperclip_origin_set; then
+    echo "[entrypoint] ERROR: PAPERCLIP_DEPLOYMENT_EXPOSURE=public requires a public origin." >&2
+    echo "[entrypoint] Set PAPERCLIP_DOMAIN (HTTPS assumed → PAPERCLIP_PUBLIC_URL) or PAPERCLIP_PUBLIC_URL / BETTER_AUTH_*." >&2
+    exit 1
+fi
 
 mkdir -p "${PAPERCLIP_HOME}" "${HERMES_HOME}"
 
@@ -70,15 +112,13 @@ case "${1:-paperclip}" in
             " || echo "[entrypoint] WARNING: onboard exited non-zero"
         fi
 
-        # Apply PAPERCLIP_EXPOSURE on every boot. paperclipai's onboard hardcodes
-        # exposure=private, but for any reverse-proxied deploy you want public
-        # (deploymentMode=authenticated still requires login). One-line sed
-        # because the field has a fixed JSON shape and there's no CLI for it.
+        # Do NOT sed-edit server.exposure in config.json. authenticated + exposure=public must
+        # also satisfy auth.publicBaseUrl in Paperclip's Zod schema; mutating exposure alone breaks
+        # `paperclipai allowed-hostname` (CLI readConfig) while the server stays on private/default.
+        # Instead we set `PAPERCLIP_DEPLOYMENT_EXPOSURE`, `PAPERCLIP_ALLOWED_HOSTNAMES`, and
+        # `PAPERCLIP_PUBLIC_URL` from env above — upstream Paperclip merges those at runtime.
+
         CFG="${PAPERCLIP_HOME}/instances/default/config.json"
-        if [ -f "$CFG" ]; then
-            sed -i -E 's|("exposure":[[:space:]]*")[^"]*(")|\1'"${PAPERCLIP_EXPOSURE}"'\2|' "$CFG"
-            echo "[entrypoint] config.json server.exposure = ${PAPERCLIP_EXPOSURE}"
-        fi
 
         # Always register PAPERCLIP_DOMAIN in the allowlist if set. This is the
         # canonical fix paperclipai's own error message recommends, and it works
@@ -95,20 +135,39 @@ case "${1:-paperclip}" in
             " || echo "[entrypoint] WARNING: allowed-hostname registration failed"
         fi
 
-        # Verification log so failures here are obvious in `docker logs`.
+        echo "[entrypoint] Paperclip runtime env:"
+        echo "[entrypoint]   PAPERCLIP_DEPLOYMENT_EXPOSURE=${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}"
+        echo "[entrypoint]   PAPERCLIP_DOMAIN=${PAPERCLIP_DOMAIN:-}"
+        echo "[entrypoint]   PAPERCLIP_ALLOWED_HOSTNAMES=${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
+        echo "[entrypoint]   PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-}"
+
+        # On-disk exposure may remain private — the server overlays via PAPERCLIP_DEPLOYMENT_EXPOSURE.
         if [ -f "$CFG" ]; then
-            echo "[entrypoint] config.json final state:"
+            echo "[entrypoint] config.json stored server fields (merged with runtime env above):"
             grep -E '"exposure"|"allowedHostnames"' "$CFG" | sed 's/^/[entrypoint]   /'
         fi
 
         echo "[entrypoint] starting paperclipai run --bind ${PAPERCLIP_BIND} --data-dir ${PAPERCLIP_HOME} as node on :3100"
-        exec su -s /bin/bash node -c "
-            export HOME='${PAPERCLIP_HOME}' \
-                   PAPERCLIP_HOME='${PAPERCLIP_HOME}' \
-                   HERMES_HOME='${HERMES_HOME}' \
-                   PATH='${PATH}'
-            exec paperclipai run --bind '${PAPERCLIP_BIND}' --data-dir '${PAPERCLIP_HOME}'
-        "
+        # Debian `su` does not reliably pass root-exported PAPERCLIP_* vars to the child. Paperclip MUST
+        # see PUBLIC_URL (+ explicit base URL mode) when deploymentExposure is public — otherwise startup
+        # fails with `authenticated public exposure requires auth.baseUrlMode=explicit`.
+        _pc_child_env="$(mktemp /tmp/paperclip-run-env.XXXXXX)"
+        chmod 0644 "${_pc_child_env}"
+        {
+            printf 'export HOME=%q\n' "${PAPERCLIP_HOME}"
+            printf 'export PAPERCLIP_HOME=%q\n' "${PAPERCLIP_HOME}"
+            printf 'export HERMES_HOME=%q\n' "${HERMES_HOME}"
+            printf 'export PATH=%q\n' "${PATH}"
+            printf 'export PAPERCLIP_DEPLOYMENT_EXPOSURE=%q\n' "${PAPERCLIP_DEPLOYMENT_EXPOSURE}"
+            [ -n "${PAPERCLIP_ALLOWED_HOSTNAMES:-}" ] && printf 'export PAPERCLIP_ALLOWED_HOSTNAMES=%q\n' "${PAPERCLIP_ALLOWED_HOSTNAMES}"
+            [ -n "${PAPERCLIP_PUBLIC_URL:-}" ] && printf 'export PAPERCLIP_PUBLIC_URL=%q\n' "${PAPERCLIP_PUBLIC_URL}"
+            [ -n "${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}" ] && printf 'export PAPERCLIP_AUTH_PUBLIC_BASE_URL=%q\n' "${PAPERCLIP_AUTH_PUBLIC_BASE_URL}"
+            if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] && paperclip_origin_set; then
+                printf 'export PAPERCLIP_AUTH_BASE_URL_MODE=%q\n' "explicit"
+            fi
+        } >"${_pc_child_env}"
+        # shellcheck disable=SC1090
+        exec su -s /bin/bash node -c ". '${_pc_child_env}'; rm -f '${_pc_child_env}'; exec paperclipai run --bind $(printf '%q' "${PAPERCLIP_BIND}") --data-dir $(printf '%q' "${PAPERCLIP_HOME}")"
         ;;
     hermes)
         # Interactive hermes CLI as node user — sees the same config + skills

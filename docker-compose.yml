@@ -40,9 +40,17 @@ services:
       # header — the right choice for any reverse-proxied deploy where
       # deploymentMode=authenticated still gates access via login.
       - PAPERCLIP_EXPOSURE=${PAPERCLIP_EXPOSURE:-public}
+      # Optional bypass: set this instead of deriving from `PAPERCLIP_EXPOSURE`.
+      # See https://paperclip.inc/docs/deploy/environment-variables/
+      - PAPERCLIP_DEPLOYMENT_EXPOSURE=${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}
+      # Comma-separated allowlist overlay (normally derived from `PAPERCLIP_DOMAIN`).
+      - PAPERCLIP_ALLOWED_HOSTNAMES=${PAPERCLIP_ALLOWED_HOSTNAMES:-}
+      # Origin for authenticated + public deployments (default: https:// plus PAPERCLIP_DOMAIN).
+      - PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-}
       # Public hostname Traefik routes to this service. The entrypoint
       # registers it via `paperclipai allowed-hostname` on every boot, so
       # paperclipai's hostname allowlist accepts requests proxied in.
+      - IP_ADDRESS=${IP_ADDRESS:-}
       - PAPERCLIP_DOMAIN=${PAPERCLIP_DOMAIN}
     volumes:
       - paperclip-data:/data/paperclip

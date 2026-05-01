@@ -22,7 +22,7 @@ Inspired by [`MinuteCode/paperclip-hermes`](https://github.com/MinuteCode/paperc
    | `OPENAI_API_KEY` / `GOOGLE_API_KEY` | for OpenAI/Google models |
    | `BROWSER_USE_API_KEY` | optional — Browser Use cloud Chromium |
    | `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` | optional — BrowserBase cloud Chromium |
-   | `IP_ADDRESS` | public hostname/IP Paperclip should accept (e.g. `paperclip.example.com`) |
+   | `PAPERCLIP_DOMAIN` | public hostname Traefik uses (no scheme/port), e.g. `paperclip.example.com` — forwarded into Paperclip as `PAPERCLIP_ALLOWED_HOSTNAMES` (+ `https://…` auth origin when `PAPERCLIP_EXPOSURE=public`). Legacy alias `IP_ADDRESS` works the same. |
 
 4. Expose port `3100` (or, preferably, attach a Traefik domain in Dokploy and let it terminate TLS in front of port 3100).
 5. Deploy. First boot runs `paperclipai onboard --yes` automatically.
