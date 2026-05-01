@@ -51,6 +51,16 @@ if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] \
     export PAPERCLIP_PUBLIC_URL="https://${PAPERCLIP_DOMAIN}"
 fi
 
+# authenticated + deploymentExposure `public` must see a public URL at runtime (@paperclipai/server).
+paperclip_origin_set() {
+    [ -n "${PAPERCLIP_PUBLIC_URL:-}${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}${BETTER_AUTH_URL:-}${BETTER_AUTH_BASE_URL:-}" ]
+}
+if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] && ! paperclip_origin_set; then
+    echo "[entrypoint] ERROR: PAPERCLIP_DEPLOYMENT_EXPOSURE=public requires a public origin." >&2
+    echo "[entrypoint] Set PAPERCLIP_DOMAIN (HTTPS assumed → PAPERCLIP_PUBLIC_URL) or PAPERCLIP_PUBLIC_URL / BETTER_AUTH_*." >&2
+    exit 1
+fi
+
 mkdir -p "${PAPERCLIP_HOME}" "${HERMES_HOME}"
 
 # ---------------------------------------------------------------------------
@@ -138,16 +148,26 @@ case "${1:-paperclip}" in
         fi
 
         echo "[entrypoint] starting paperclipai run --bind ${PAPERCLIP_BIND} --data-dir ${PAPERCLIP_HOME} as node on :3100"
-        # Preserve full container env unless we override HOME — Paperclip merges
-        # PAPERCLIP_ALLOWED_HOSTNAMES / PAPERCLIP_DEPLOYMENT_EXPOSURE / PAPERCLIP_PUBLIC_URL
-        # from exported vars above (do not blank unrelated secrets with empty `export` here).
-        exec su -s /bin/bash node -c "
-            export HOME='${PAPERCLIP_HOME}' \
-                   PAPERCLIP_HOME='${PAPERCLIP_HOME}' \
-                   HERMES_HOME='${HERMES_HOME}' \
-                   PATH='${PATH}'
-            exec paperclipai run --bind '${PAPERCLIP_BIND}' --data-dir '${PAPERCLIP_HOME}'
-        "
+        # Debian `su` does not reliably pass root-exported PAPERCLIP_* vars to the child. Paperclip MUST
+        # see PUBLIC_URL (+ explicit base URL mode) when deploymentExposure is public — otherwise startup
+        # fails with `authenticated public exposure requires auth.baseUrlMode=explicit`.
+        _pc_child_env="$(mktemp /tmp/paperclip-run-env.XXXXXX)"
+        chmod 0644 "${_pc_child_env}"
+        {
+            printf 'export HOME=%q\n' "${PAPERCLIP_HOME}"
+            printf 'export PAPERCLIP_HOME=%q\n' "${PAPERCLIP_HOME}"
+            printf 'export HERMES_HOME=%q\n' "${HERMES_HOME}"
+            printf 'export PATH=%q\n' "${PATH}"
+            printf 'export PAPERCLIP_DEPLOYMENT_EXPOSURE=%q\n' "${PAPERCLIP_DEPLOYMENT_EXPOSURE}"
+            [ -n "${PAPERCLIP_ALLOWED_HOSTNAMES:-}" ] && printf 'export PAPERCLIP_ALLOWED_HOSTNAMES=%q\n' "${PAPERCLIP_ALLOWED_HOSTNAMES}"
+            [ -n "${PAPERCLIP_PUBLIC_URL:-}" ] && printf 'export PAPERCLIP_PUBLIC_URL=%q\n' "${PAPERCLIP_PUBLIC_URL}"
+            [ -n "${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}" ] && printf 'export PAPERCLIP_AUTH_PUBLIC_BASE_URL=%q\n' "${PAPERCLIP_AUTH_PUBLIC_BASE_URL}"
+            if [ "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" = "public" ] && paperclip_origin_set; then
+                printf 'export PAPERCLIP_AUTH_BASE_URL_MODE=%q\n' "explicit"
+            fi
+        } >"${_pc_child_env}"
+        # shellcheck disable=SC1090
+        exec su -s /bin/bash node -c ". '${_pc_child_env}'; rm -f '${_pc_child_env}'; exec paperclipai run --bind $(printf '%q' "${PAPERCLIP_BIND}") --data-dir $(printf '%q' "${PAPERCLIP_HOME}")"
         ;;
     hermes)
         # Interactive hermes CLI as node user — sees the same config + skills
